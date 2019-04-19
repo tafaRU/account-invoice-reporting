@@ -34,9 +34,33 @@ class AccountInvoiceLine(models.Model):
     @api.multi
     def _compute_prod_lots(self):
         for line in self:
-            quant_ids = line.move_line_ids.mapped('quant_ids').filtered(
-                lambda x: x.location_id.usage == 'customer')
-            line.prod_lot_ids = quant_ids.mapped('lot_id')
+            # Get the moves from the procurement: same approach of
+            # sale.order.line._get_delivered_qty, in module sale_stock.
+            moves = line.order_line_ids.mapped('procurement_ids.move_ids')
+            moves = moves.filtered(
+                lambda move:
+                move.state == 'done'
+                and not move.scrapped)
+
+            # We only want the moves that:
+            # 1. Haven't been returned.
+            #
+            # Note that every time a move move_0 is returned by move_1,
+            # we have move_1.origin_returned_move_id = move_0.
+            # As far as I know, there is no clue
+            # in move_0 to signal that it has been returned,
+            # so we have to search through all the moves.
+            return_moves = moves.search([
+                ('origin_returned_move_id', 'in', moves.ids)]) \
+                .mapped('origin_returned_move_id')
+            moves -= return_moves
+
+            # 2. Have been sent to a customer
+            moves = moves.filtered(
+                lambda move:
+                move.location_dest_id.usage == 'customer')
+
+            line.prod_lot_ids = moves.mapped('quant_ids.lot_id')
 
     @api.multi
     def _compute_line_lots(self):
